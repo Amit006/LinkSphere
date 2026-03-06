@@ -1,0 +1,78 @@
+// Prisma schema for LinkSphere analytics
+// PostgreSQL stores click events and user data
+// DynamoDB stores URL mappings (read-heavy, low latency)
+//
+// Interview talking point: "I split storage by access pattern.
+// DynamoDB for URL lookups (key-value, microsecond latency at scale),
+// PostgreSQL for analytics (complex aggregation queries, JOINs)."
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String?  // null for OAuth users
+  plan      Plan     @default(FREE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clicks    ClickEvent[]
+
+  @@index([email])
+  @@map("users")
+}
+
+enum Plan {
+  FREE
+  PRO
+}
+
+// ─── Click Events ──────────────────────────────────────────────────────────
+// High write volume — every redirect logs here
+// Interview talking point: "This table could get very large. In production
+// I'd partition by month or move to a columnar store like Redshift."
+
+model ClickEvent {
+  id        String   @id @default(cuid())
+  shortCode String
+  clickedAt DateTime @default(now())
+
+  // Device info (parsed from User-Agent on Lambda)
+  browser   String?
+  os        String?
+  device    DeviceType @default(UNKNOWN)
+
+  // Geo info (from CloudFront headers — free, no extra API needed)
+  country   String?  // ISO 3166-1 alpha-2, e.g. "IN"
+  region    String?
+  city      String?
+
+  // Traffic source
+  referer   String?
+  ipHash    String?  // Anonymized for GDPR
+
+  // Optional user link (null for anonymous clicks)
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@index([shortCode])
+  @@index([shortCode, clickedAt])  // For time-series queries
+  @@index([clickedAt])             // For global analytics
+  @@map("click_events")
+}
+
+enum DeviceType {
+  DESKTOP
+  MOBILE
+  TABLET
+  UNKNOWN
+}
