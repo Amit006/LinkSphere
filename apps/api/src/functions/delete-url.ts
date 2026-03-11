@@ -1,0 +1,1 @@
+export { deleteHandler as handler } from './list-urls';

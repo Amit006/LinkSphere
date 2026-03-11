@@ -2,6 +2,9 @@
 node_modules
 .pnp
 .pnp.js
+package-lock.json
+yarn.lock
+
 
 # Build outputs
 dist
@@ -43,3 +46,6 @@ coverage
 
 # Prisma
 prisma/migrations/**/migration_lock.toml
+api/prisma/migrations/**/migration_lock.toml
+
+#Ign

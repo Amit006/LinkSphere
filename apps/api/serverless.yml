@@ -5,7 +5,7 @@ frameworkVersion: '3'
 provider:
   name: aws
   runtime: nodejs20.x
-  region: ${opt:region, 'ap-south-1'}   # Mumbai — closest to Hyderabad
+  region: ${opt:region, 'eu-north-1'}   # Stockholm — matches AWS CLI default
   stage: ${opt:stage, 'dev'}
   memorySize: 256
   timeout: 10
@@ -16,10 +16,10 @@ provider:
     NODE_ENV: ${self:provider.stage}
     DYNAMODB_TABLE_URLS: ${self:service}-urls-${self:provider.stage}
     DYNAMODB_TABLE_COUNTERS: ${self:service}-counters-${self:provider.stage}
-    REDIS_URL: ${ssm:/linksphere/${self:provider.stage}/redis-url}
-    DATABASE_URL: ${ssm:/linksphere/${self:provider.stage}/database-url}
-    BASE_URL: ${ssm:/linksphere/${self:provider.stage}/base-url}
-    JWT_SECRET: ${ssm:/linksphere/${self:provider.stage}/jwt-secret}
+    REDIS_URL: ${ssm(eu-north-1):/linksphere/${self:provider.stage}/redis-url}
+    DATABASE_URL: ${ssm(eu-north-1):/linksphere/${self:provider.stage}/database-url}
+    BASE_URL: ${ssm(eu-north-1):/linksphere/${self:provider.stage}/base-url}
+    JWT_SECRET: ${ssm(eu-north-1):/linksphere/${self:provider.stage}/jwt-secret}
 
   # IAM permissions for Lambda execution role
   iam:

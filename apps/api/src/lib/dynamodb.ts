@@ -54,15 +54,19 @@ export const UrlRepository = {
    * Uses ConditionExpression to prevent overwriting an existing code.
    */
   async create(url: ShortenedUrl): Promise<void> {
+    // Strip null/undefined values — DynamoDB GSIs reject null for index keys.
+    // If userId is null, omit it so the item is excluded from the GSI entirely.
+    const item = Object.fromEntries(
+      Object.entries({
+        ...url,
+        ...(url.expiresAt && { ttl: Math.floor(new Date(url.expiresAt).getTime() / 1000) }),
+      }).filter(([, v]) => v !== null && v !== undefined)
+    );
+
     await docClient.send(
       new PutCommand({
         TableName: URLS_TABLE,
-        Item: {
-          ...url,
-          // DynamoDB TTL: Unix timestamp in seconds
-          ...(url.expiresAt && { ttl: Math.floor(new Date(url.expiresAt).getTime() / 1000) }),
-        },
-        // Fail if the short code already exists (collision safety)
+        Item: item,
         ConditionExpression: 'attribute_not_exists(shortCode)',
       })
     );

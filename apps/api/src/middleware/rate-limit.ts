@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { getRedisClient, CacheKeys, CacheTTL } from './redis';
+import { getRedisClient, CacheKeys, CacheTTL } from '../lib/redis';
 
 /**
  * Sliding window rate limiter using Redis.
