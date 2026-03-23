@@ -2,7 +2,7 @@
 
 > Distributed URL shortener with real-time analytics — built to demonstrate production-grade system design.
 
-[![CI/CD](https://github.com/yourusername/linksphere/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/yourusername/linksphere/actions)
+[![CI/CD](https://github.com/Amit006/linksphere/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Amit006/linksphere/actions)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.4-blue)](https://www.typescriptlang.org)
 [![AWS Lambda](https://img.shields.io/badge/AWS-Lambda-orange)](https://aws.amazon.com/lambda)
 
@@ -137,18 +137,18 @@ just deploy-dev
 ```
 Service deployed to stack linksphere-api-dev (128s)
 
-endpoints:                                                                                                      
-  POST - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/shorten
-  GET - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/{code}
-  GET - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/analytics/{code}
-  GET - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/urls
-  DELETE - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/urls/{code}
-functions:
-  shorten: linksphere-api-dev-shorten (5.2 MB)                                                                  
-  redirect: linksphere-api-dev-redirect (5.2 MB)
-  analytics: linksphere-api-dev-analytics (5.2 MB)
-  listUrls: linksphere-api-dev-listUrls (5.2 MB)
-  deleteUrl: linksphere-api-dev-deleteUrl (5.2 MB)
+# endpoints:                                                                                                      
+  - POST - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/shorten
+  - GET - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/{code}
+  - GET - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/analytics/{code}
+  - GET - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/urls
+  - DELETE - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/urls/{code}
+# functions:
+  - shorten: linksphere-api-dev-shorten (5.2 MB)                                                                  
+  - redirect: linksphere-api-dev-redirect (5.2 MB)
+  - analytics: linksphere-api-dev-analytics (5.2 MB)
+  - listUrls: linksphere-api-dev-listUrls (5.2 MB)
+  - deleteUrl: linksphere-api-dev-deleteUrl (5.2 MB)
 
 # Deploy to production (prompts for confirmation)
 just deploy-prod
@@ -190,6 +190,7 @@ Tested with [k6](https://k6.io) at 1,000 concurrent users (Week 6):
 - [ ] Week 7: Custom domain support
 - [ ] Week 8: Blog post + demo video
 
+```
 ## Author
 
-**Amit Nayek** — [LinkedIn](https://www.linkedin.com/in/amitnayek-381b7349)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Profile-blue)](https://www.linkedin.com/in/amitnayek-381b7349)
