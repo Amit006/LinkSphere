@@ -1,9 +1,10 @@
 const path = require('path');
 const slsw = require('serverless-webpack');
+const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 module.exports = {
   entry: slsw.lib.entries,
-  target: 'node16',
+  target: 'node',
   mode: slsw.lib.webpack.isLocal ? 'development' : 'production',
   devtool: 'source-map',
   resolve: {
@@ -23,12 +24,30 @@ module.exports = {
         test: /\.ts$/,
         loader: 'ts-loader',
         exclude: /node_modules/,
-        options: {
-          transpileOnly: true, // Faster builds — type checking handled by tsc separately
-        },
+        options: { transpileOnly: true },
+      },
+      {
+        test: /\.node$/,
+        loader: 'node-loader',
       },
     ],
   },
-  // Don't bundle AWS SDK — it's provided by the Lambda runtime
-  externals: ['aws-sdk', '@aws-sdk/client-dynamodb', '@aws-sdk/lib-dynamodb'],
+  plugins: [
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: path.join(
+            __dirname,
+            '../../node_modules/.prisma/client/libquery_engine-rhel-openssl-3.0.x.so.node'
+          ),
+          to: path.join(__dirname, '.webpack/service/'),
+        },
+      ],
+    }),
+  ],
+  externals: [
+    'aws-sdk',
+    '@aws-sdk/client-dynamodb',
+    '@aws-sdk/lib-dynamodb',
+  ],
 };
