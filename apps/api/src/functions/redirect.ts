@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
+import type { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import { isValidShortCode, anonymizeIp, generateEventId } from '@linksphere/core';
 import { UrlRepository } from '../lib/dynamodb';
 import { getRedisClient, CacheKeys, CacheTTL } from '../lib/redis';
@@ -18,43 +18,57 @@ import { recordClick } from '../services/analytics.service';
  *
  * Target: p99 < 50ms for warm cache hit.
  */
-export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+export const handler = async (event: APIGatewayProxyEvent, context: Context): Promise<APIGatewayProxyResult> => {
+context.callbackWaitsForEmptyEventLoop = true;
   const code = event.pathParameters?.['code'] ?? '';
+  const ip = getClientIp(event);
+
+  // Start click recording IMMEDIATELY — runs in parallel with everything else
+  const clickPromise = recordClick({
+    id: generateEventId(),
+    shortCode: code,
+    clickedAt: new Date().toISOString(),
+    userAgent: event.headers['user-agent'] ?? null,
+    ip: anonymizeIp(ip),
+    referer: event.headers['referer'] ?? event.headers['referrer'] ?? null,
+    country: event.headers['cloudfront-viewer-country'] ?? null,
+    region: event.headers['cloudfront-viewer-country-region'] ?? null,
+    city: event.headers['cloudfront-viewer-city'] ?? null,
+  }).catch((err) => console.error('[redirect] click failed:', err.message));
+
 
   // ── Validate code format immediately ──────────────────────────────────────
   if (!isValidShortCode(code)) {
     return error('Invalid short code', 'INVALID_CODE', 400);
   }
 
-  const ip = getClientIp(event);
+  // // ── Rate limit (DDoS protection) ──────────────────────────────────────────
+  // const rateLimit = await checkRateLimit(
+  //   CacheKeys.rateLimitRedirect(ip),
+  //   RateLimits.redirect.limit,
+  //   RateLimits.redirect.windowMs
+  // );
 
-  // ── Rate limit (DDoS protection) ──────────────────────────────────────────
-  const rateLimit = await checkRateLimit(
-    CacheKeys.rateLimitRedirect(ip),
-    RateLimits.redirect.limit,
-    RateLimits.redirect.windowMs
-  );
-
-  if (!rateLimit.allowed) {
-    return rateLimited(rateLimit.resetAt);
-  }
+  // if (!rateLimit.allowed) {
+  //   return rateLimited(rateLimit.resetAt);
+  // }
 
   // ── 1. Try Redis cache ────────────────────────────────────────────────────
   const redis = getRedisClient();
   const cacheKey = CacheKeys.urlRecord(code);
-  const cached = await redis.get(cacheKey);
+  // const cached = await redis.get(cacheKey);
 
   let originalUrl: string | null = null;
   let isActive = true;
   let expiresAt: string | null = null;
 
-  if (cached) {
-    // Cache HIT — fastest path
-    const record = JSON.parse(cached);
-    originalUrl = record.originalUrl;
-    isActive = record.isActive;
-    expiresAt = record.expiresAt;
-  } else {
+  // if (cached) {
+  //   // Cache HIT — fastest path
+  //   const record = JSON.parse(cached);
+  //   originalUrl = record.originalUrl;
+  //   isActive = record.isActive;
+  //   expiresAt = record.expiresAt;
+  // } else {
     // Cache MISS — fetch from DynamoDB and re-populate cache
     const record = await UrlRepository.getByCode(code);
 
@@ -68,7 +82,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     // Re-populate cache
     await redis.setex(cacheKey, CacheTTL.urlRecord, JSON.stringify(record));
-  }
+  // }
 
   // ── Check URL is still active ─────────────────────────────────────────────
   if (!isActive) {
@@ -84,21 +98,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
   // We deliberately do NOT await this. The user gets their redirect immediately.
   // Interview talking point: "Decoupling analytics from the redirect path keeps
   // p99 latency low. A slow PostgreSQL write never delays a redirect."
-  recordClick({
-    id: generateEventId(),
-    shortCode: code,
-    clickedAt: new Date().toISOString(),
-    userAgent: event.headers['user-agent'] ?? null,
-    ip: anonymizeIp(ip),
-    referer: event.headers['referer'] ?? event.headers['referrer'] ?? null,
-    // CloudFront geo headers (available when deployed behind CloudFront)
-    country: event.headers['cloudfront-viewer-country'] ?? null,
-    region: event.headers['cloudfront-viewer-country-region'] ?? null,
-    city: event.headers['cloudfront-viewer-city'] ?? null,
-  }).catch((err) => {
-    // Log but never fail the redirect for an analytics error
-    console.error('[redirect] Failed to record click:', err);
-  });
+  // 1. Record click FIRST (awaited)
 
+  await clickPromise;
   return redirect(originalUrl!);
 };

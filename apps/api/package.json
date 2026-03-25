@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predeploy:dev": "node -e \"const fs=require('fs');const src='../../node_modules/prisma/libquery_engine-rhel-openssl-3.0.x.so.node';const dest='.serverless/build/libquery_engine-rhel-openssl-3.0.x.so.node';if(fs.existsSync(src)){fs.mkdirSync('.serverless/build',{recursive:true});fs.copyFileSync(src,dest);console.log('✔ Prisma binary copied');}else{console.warn('⚠ Binary not found:',src);}\"",
+    "predeploy:prod": "node -e \"const fs=require('fs');const src='../../node_modules/prisma/libquery_engine-rhel-openssl-3.0.x.so.node';const dest='.serverless/build/libquery_engine-rhel-openssl-3.0.x.so.node';if(fs.existsSync(src)){fs.mkdirSync('.serverless/build',{recursive:true});fs.copyFileSync(src,dest);console.log('✔ Prisma binary copied');}else{console.warn('⚠ Binary not found:',src);}\"",
     "build": "tsc && tsc-alias",
     "dev": "ts-node-dev --respawn --transpile-only src/server.local.ts",
     "lint": "eslint src/",
@@ -18,26 +20,25 @@
     "@aws-sdk/client-dynamodb": "^3.600.0",
     "@aws-sdk/lib-dynamodb": "^3.600.0",
     "@linksphere/core": "*",
-    "@prisma/client": "^5.15.0",
+    "@neondatabase/serverless": "^1.0.2",
+    "@prisma/adapter-pg": "^5.22.0",
     "ioredis": "^5.4.1",
+    "pg": "^8.20.0",
     "ua-parser-js": "^1.0.38",
     "uuid": "^10.0.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@prisma/client": "^5.22.0",
     "@types/aws-lambda": "^8.10.140",
+    "@types/pg": "^8.20.0",
     "@types/ua-parser-js": "^0.7.39",
     "@types/uuid": "^10.0.0",
-    "copy-webpack-plugin": "^14.0.0",
-    "node-loader": "^2.1.0",
-    "prisma": "^5.15.0",
+    "prisma": "^5.22.0",
     "serverless": "^3.38.0",
-    "serverless-webpack": "^5.14.0",
-    "ts-loader": "^9.5.0",
     "ts-node-dev": "^2.0.0",
     "tsc-alias": "^1.8.10",
     "typescript": "^5.4.0",
-    "vitest": "^1.6.0",
-    "webpack": "^5.92.0"
+    "vitest": "^1.6.0"
   }
 }

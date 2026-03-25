@@ -2,9 +2,6 @@
 node_modules
 .pnp
 .pnp.js
-package-lock.json
-yarn.lock
-
 
 # Build outputs
 dist
@@ -14,7 +11,7 @@ out
 build
 *.tsbuildinfo
 
-# Environment
+# Environment — NEVER commit
 .env
 .env.local
 .env.*.local
@@ -46,6 +43,23 @@ coverage
 
 # Prisma
 prisma/migrations/**/migration_lock.toml
-api/prisma/migrations/**/migration_lock.toml
+apps/api/prisma/migrations/**/migration_lock.toml
 
-#Ign
+# Prisma generated client — auto-generated, don't commit
+apps/api/src/generated/
+
+# Prisma native binary — platform specific, regenerated locally
+apps/api/src/libquery_engine-*.node
+apps/api/node_modules/.prisma/
+
+# Source maps and declaration files from compiled output
+*.js.map
+*.d.ts.map
+*d.ts
+*.js
+
+# Test files
+apps/api/test-*.js
+
+# Webpack output
+apps/api/.webpack/

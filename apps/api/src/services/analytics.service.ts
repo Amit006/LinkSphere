@@ -1,22 +1,33 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../generated/prisma';
+import { PrismaPg } from '@prisma/adapter-pg';
+import pg from 'pg';
 import UAParser from 'ua-parser-js';
-import type { DeviceType } from '@prisma/client';
+import { neon } from '@neondatabase/serverless';
 
-/**
- * Prisma client singleton — reused across warm Lambda invocations.
- */
+// ─── Neon HTTP client for writes (fast, no TCP cold start) ───────────────────
+// Uses HTTPS fetch instead of TCP — works instantly from any Lambda region
+const sql = neon(process.env['DATABASE_URL']!);
+console.log('[neon] DB URL prefix:', process.env['DATABASE_URL']?.substring(0, 40));
+// ─── Prisma client for reads (complex aggregation queries) ───────────────────
 let prisma: PrismaClient | null = null;
 
-function getPrisma(): PrismaClient {
-  if (!prisma) {
-    prisma = new PrismaClient({
-      log: process.env['NODE_ENV'] === 'development' ? ['query', 'error'] : ['error'],
-    });
-  }
-  return prisma;
+// Lazy load Prisma — only needed for analytics reads, not for click writes
+function getPrisma() {
+  const { PrismaClient } = require('../generated/prisma');
+  const { PrismaPg } = require('@prisma/adapter-pg');
+  const pg = require('pg');
+  
+  const pool = new pg.Pool({
+    connectionString: process.env['DATABASE_URL'],
+    ssl: { rejectUnauthorized: false },
+    max: 1,
+  });
+  const adapter = new PrismaPg(pool as any);
+  return new PrismaClient({ adapter } as any);
 }
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-// ─── Types ────────────────────────────────────────────────────────────────
+type DeviceType = 'DESKTOP' | 'MOBILE' | 'TABLET' | 'UNKNOWN';
 
 interface ClickEventInput {
   id: string;
@@ -30,11 +41,8 @@ interface ClickEventInput {
   city: string | null;
 }
 
-// ─── Service functions ─────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Parse User-Agent string into structured device info.
- */
 function parseUserAgent(ua: string | null): {
   browser: string | null;
   os: string | null;
@@ -48,7 +56,6 @@ function parseUserAgent(ua: string | null): {
   let device: DeviceType = 'DESKTOP';
   if (result.device.type === 'mobile') device = 'MOBILE';
   else if (result.device.type === 'tablet') device = 'TABLET';
-  else if (!result.device.type) device = 'DESKTOP';
 
   return {
     browser: result.browser.name ?? null,
@@ -57,34 +64,45 @@ function parseUserAgent(ua: string | null): {
   };
 }
 
+function truncate(str: string, maxLen: number): string {
+  return str.length > maxLen ? str.slice(0, maxLen) : str;
+}
+
+// ─── Service functions ────────────────────────────────────────────────────────
+
 /**
- * Record a click event in PostgreSQL.
- * Called asynchronously from the redirect handler — never blocks the redirect.
+ * Record a click event using Neon HTTP driver.
+ * No TCP connection — works instantly from Lambda cold start.
+ * Interview talking point: "I use Neon's serverless HTTP driver for writes
+ * to avoid TCP connection overhead on Lambda cold starts."
  */
 export async function recordClick(input: ClickEventInput): Promise<void> {
-  const db = getPrisma();
+  console.log('[recordClick] START', Date.now());
   const { browser, os, device } = parseUserAgent(input.userAgent);
 
-  await db.clickEvent.create({
-    data: {
-      id: input.id,
-      shortCode: input.shortCode,
-      clickedAt: new Date(input.clickedAt),
+  await sql.query(
+    `INSERT INTO click_events 
+      (id, "shortCode", "clickedAt", browser, os, device, country, region, city, referer, "ipHash")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    [
+      input.id,
+      input.shortCode,
+      new Date(input.clickedAt).toISOString(),
       browser,
       os,
       device,
-      country: input.country,
-      region: input.region,
-      city: input.city,
-      referer: input.referer ? truncate(input.referer, 500) : null,
-      ipHash: input.ip,
-    },
-  });
+      input.country,
+      input.region,
+      input.city,
+      input.referer ? truncate(input.referer, 500) : null,
+      input.ip,
+    ]
+  );
+  console.log('[recordClick] SUCCESS', Date.now());
 }
-
 /**
  * Get analytics summary for a short code.
- * Aggregates click data from PostgreSQL.
+ * Uses Prisma for complex aggregation queries.
  */
 export async function getAnalyticsSummary(shortCode: string) {
   const db = getPrisma();
@@ -92,46 +110,40 @@ export async function getAnalyticsSummary(shortCode: string) {
 
   const [totalClicks, recentClicks, topCountries, deviceBreakdown, topReferers] =
     await Promise.all([
-      // Total all-time clicks
       db.clickEvent.count({ where: { shortCode } }),
 
-      // Clicks per day for last 30 days
       db.clickEvent.findMany({
         where: { shortCode, clickedAt: { gte: thirtyDaysAgo } },
         select: { clickedAt: true, device: true, country: true, referer: true, ipHash: true },
         orderBy: { clickedAt: 'asc' },
       }),
 
-      // Top countries
       db.$queryRaw<Array<{ country: string; count: bigint }>>`
         SELECT country, COUNT(*) as count
         FROM click_events
-        WHERE short_code = ${shortCode} AND country IS NOT NULL
+        WHERE "shortCode" = ${shortCode} AND country IS NOT NULL
         GROUP BY country
         ORDER BY count DESC
         LIMIT 10
       `,
 
-      // Device breakdown
       db.$queryRaw<Array<{ device: string; count: bigint }>>`
         SELECT device, COUNT(*) as count
         FROM click_events
-        WHERE short_code = ${shortCode}
+        WHERE "shortCode" = ${shortCode}
         GROUP BY device
       `,
 
-      // Top referers
       db.$queryRaw<Array<{ referer: string; count: bigint }>>`
         SELECT referer, COUNT(*) as count
         FROM click_events
-        WHERE short_code = ${shortCode} AND referer IS NOT NULL
+        WHERE "shortCode" = ${shortCode} AND referer IS NOT NULL
         GROUP BY referer
         ORDER BY count DESC
         LIMIT 10
       `,
     ]);
 
-  // Group clicks by day
   const clicksByDay: Record<string, number> = {};
   const uniqueIps = new Set<string>();
 
@@ -152,8 +164,4 @@ export async function getAnalyticsSummary(shortCode: string) {
       deviceBreakdown.map((r) => [r.device.toLowerCase(), Number(r.count)])
     ),
   };
-}
-
-function truncate(str: string, maxLen: number): string {
-  return str.length > maxLen ? str.slice(0, maxLen) : str;
 }

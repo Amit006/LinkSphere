@@ -1,17 +1,16 @@
 service: linksphere-api
 
-frameworkVersion: '3'
+frameworkVersion: '4'
 
 provider:
   name: aws
   runtime: nodejs20.x
-  region: ${opt:region, 'eu-north-1'}   # Stockholm — matches AWS CLI default
+  region: ${opt:region, 'eu-north-1'}
   stage: ${opt:stage, 'dev'}
-  memorySize: 256
-  timeout: 10
+  memorySize: 1024
+  timeout: 29
   logRetentionInDays: 14
 
-  # All Lambda functions get these env vars
   environment:
     NODE_ENV: ${self:provider.stage}
     DYNAMODB_TABLE_URLS: ${self:service}-urls-${self:provider.stage}
@@ -20,8 +19,8 @@ provider:
     DATABASE_URL: ${ssm(eu-north-1):/linksphere/${self:provider.stage}/database-url}
     BASE_URL: ${ssm(eu-north-1):/linksphere/${self:provider.stage}/base-url}
     JWT_SECRET: ${ssm(eu-north-1):/linksphere/${self:provider.stage}/jwt-secret}
+    PRISMA_QUERY_ENGINE_LIBRARY: /var/task/src/libquery_engine-rhel-openssl-3.0.x.so.node
 
-  # IAM permissions for Lambda execution role
   iam:
     role:
       statements:
@@ -37,75 +36,76 @@ provider:
             - arn:aws:dynamodb:${self:provider.region}:*:table/${self:service}-*-${self:provider.stage}
             - arn:aws:dynamodb:${self:provider.region}:*:table/${self:service}-*-${self:provider.stage}/index/*
 
-# ─── Lambda Functions ──────────────────────────────────────────────────────
+build:
+  esbuild:
+    bundle: true
+    minify: false
+    sourcemap: true
+    target: node20
+    platform: node
+    external:
+      - '@aws-sdk/client-dynamodb'
+      - '@aws-sdk/lib-dynamodb'
+    alias:
+      '@linksphere/core': '../../packages/core/dist/index.js'
+
+# Copy Prisma Linux binary into the deployment package
+package:
+  patterns:
+    - 'src/libquery_engine-rhel-openssl-3.0.x.so.node'
 
 functions:
-
-  # POST /api/shorten
   shorten:
     handler: src/functions/shorten.handler
-    description: Accept a long URL and return a short code
     events:
       - http:
           path: /api/shorten
           method: post
           cors: true
 
-  # GET /{code} — the redirect function (most called, needs to be FAST)
   redirect:
     handler: src/functions/redirect.handler
-    description: Redirect short code to original URL
-    memorySize: 512   # More memory = more CPU = faster cold starts
-    timeout: 5
+    memorySize: 1024
+    timeout: 29
     events:
       - http:
           path: /{code}
           method: get
           cors: false
 
-  # GET /api/analytics/{code}
   analytics:
     handler: src/functions/analytics.handler
-    description: Return click analytics for a short code
+    timeout: 29
     events:
       - http:
           path: /api/analytics/{code}
           method: get
           cors: true
 
-  # GET /api/urls — list user's URLs (requires auth)
   listUrls:
-    handler: src/functions/list-urls.handler
-    description: List all URLs created by the authenticated user
+    handler: src/functions/list-urls.listHandler
     events:
       - http:
           path: /api/urls
           method: get
           cors: true
 
-  # DELETE /api/urls/{code}
   deleteUrl:
     handler: src/functions/delete-url.handler
-    description: Deactivate a shortened URL
     events:
       - http:
           path: /api/urls/{code}
           method: delete
           cors: true
 
-# ─── DynamoDB Tables ──────────────────────────────────────────────────────
-
 resources:
   Resources:
-    # Main URL mapping table
     UrlsTable:
       Type: AWS::DynamoDB::Table
+      DeletionPolicy: Retain
       Properties:
         TableName: ${self:service}-urls-${self:provider.stage}
-        BillingMode: PAY_PER_REQUEST  # No capacity planning needed
-        TableClass: STANDARD
-        PointInTimeRecoverySpecification:
-          PointInTimeRecoveryEnabled: true
+        BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
           - AttributeName: shortCode
             AttributeType: S
@@ -117,7 +117,6 @@ resources:
           - AttributeName: shortCode
             KeyType: HASH
         GlobalSecondaryIndexes:
-          # Query all URLs by a user, sorted by creation time
           - IndexName: userId-createdAt-index
             KeySchema:
               - AttributeName: userId
@@ -128,11 +127,11 @@ resources:
               ProjectionType: ALL
         TimeToLiveSpecification:
           AttributeName: ttl
-          Enabled: true  # Auto-delete expired URLs
+          Enabled: true
 
-    # Atomic counter table for Base62 ID generation
     CountersTable:
       Type: AWS::DynamoDB::Table
+      DeletionPolicy: Retain
       Properties:
         TableName: ${self:service}-counters-${self:provider.stage}
         BillingMode: PAY_PER_REQUEST
@@ -142,14 +141,3 @@ resources:
         KeySchema:
           - AttributeName: counterName
             KeyType: HASH
-
-plugins:
-  - serverless-webpack
-
-custom:
-  webpack:
-    webpackConfig: webpack.config.js
-    includeModules:
-      forceExclude:
-        - aws-sdk
-    packager: npm
