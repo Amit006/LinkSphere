@@ -56,7 +56,22 @@ apps/api/node_modules/.prisma/
 *.js.map
 *.d.ts.map
 *d.ts
-*.js
+
+# functional test output
+apps/api/src/functions/**/test-output/
+apps/api/src/functions/*.js
+
+# packages/core compiled output
+packages/core/src/**/*.js
+packages/core/src/**/*.d.ts
+
+# apps/web compiled output  
+apps/web/src/**/*.js
+
+# apps/api lib/middleware/services compiled output
+apps/api/src/lib/*.js
+apps/api/src/middleware/*.js
+apps/api/src/services/*.js
 
 # Test files
 apps/api/test-*.js
