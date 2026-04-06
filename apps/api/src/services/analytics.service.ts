@@ -80,25 +80,35 @@ export async function recordClick(input: ClickEventInput): Promise<void> {
   console.log('[recordClick] START', Date.now());
   const { browser, os, device } = parseUserAgent(input.userAgent);
 
-  await sql.query(
-    `INSERT INTO click_events 
-      (id, "shortCode", "clickedAt", browser, os, device, country, region, city, referer, "ipHash")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-    [
-      input.id,
-      input.shortCode,
-      new Date(input.clickedAt).toISOString(),
-      browser,
-      os,
-      device,
-      input.country,
-      input.region,
-      input.city,
-      input.referer ? truncate(input.referer, 500) : null,
-      input.ip,
-    ]
-  );
-  console.log('[recordClick] SUCCESS', Date.now());
+  const params = [
+    input.id,
+    input.shortCode,
+    new Date(input.clickedAt).toISOString(),
+    browser,
+    os,
+    device,
+    input.country,
+    input.region,
+    input.city,
+    input.referer ? truncate(input.referer, 500) : null,
+    input.ip,
+  ];
+
+  const query = `INSERT INTO click_events 
+    (id, "shortCode", "clickedAt", browser, os, device, country, region, city, referer, "ipHash")
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`;
+
+  // Retry once on socket error — handles stale connections after cold start
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await sql.query(query, params);
+      console.log('[recordClick] SUCCESS', Date.now());
+      return;
+    } catch (err: any) {
+      if (attempt === 2 || !err.message?.includes('fetch failed')) throw err;
+      console.warn('[recordClick] Retrying after socket error...');
+    }
+  }
 }
 /**
  * Get analytics summary for a short code.

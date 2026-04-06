@@ -8,97 +8,156 @@ import { recordClick } from '../services/analytics.service';
 
 /**
  * GET /{code}
- * The most-called Lambda in the system — needs to be as fast as possible.
  *
  * Performance strategy:
- * 1. Check Redis cache first (sub-millisecond)
- * 2. If cache miss, fetch from DynamoDB (single-digit ms)
- * 3. Re-populate cache on miss
- * 4. Fire click event asynchronously (don't block redirect)
- *
- * Target: p99 < 50ms for warm cache hit.
+ * 1. Start click recording immediately (parallel with lookup)
+ * 2. Check Redis cache first (sub-millisecond)
+ * 3. If cache miss, fetch from DynamoDB
+ * 4. Await click recording, then redirect
  */
-export const handler = async (event: APIGatewayProxyEvent, context: Context): Promise<APIGatewayProxyResult> => {
-context.callbackWaitsForEmptyEventLoop = true;
+
+// ─── IP Geolocation ────────────────────────────────────────────────────────
+// Uses ip-api.com free tier (45 req/min) — no API key needed
+// In production: use CloudFront geo headers (free, no rate limit)
+async function getGeoFromIp(ip: string): Promise<{
+  country: string | null;
+  region: string | null;
+  city: string | null;
+}> {
+  // Skip for private/local IPs
+  if (ip === 'unknown' || ip.startsWith('192.168') || ip.startsWith('127.') || ip.startsWith('10.')) {
+    return { country: null, region: null, city: null };
+  }
+
+  try {
+    const res = await fetch(
+      `http://ip-api.com/json/${ip}?fields=status,countryCode,regionName,city`,
+      { signal: AbortSignal.timeout(2000) } // 2s timeout
+    );
+    const data = await res.json() as {
+      status: string;
+      countryCode?: string;
+      regionName?: string;
+      city?: string;
+    };
+
+    if (data.status === 'success') {
+      return {
+        country: data.countryCode ?? null,
+        region: data.regionName ?? null,
+        city: data.city ?? null,
+      };
+    }
+  } catch {
+    // Geo lookup failed — not critical, continue without it
+  }
+  return { country: null, region: null, city: null };
+}
+
+export const handler = async (
+  event: APIGatewayProxyEvent,
+  context: Context
+): Promise<APIGatewayProxyResult> => {
+  context.callbackWaitsForEmptyEventLoop = true;
   const code = event.pathParameters?.['code'] ?? '';
   const ip = getClientIp(event);
 
-  // Start click recording IMMEDIATELY — runs in parallel with everything else
-  const clickPromise = recordClick({
-    id: generateEventId(),
-    shortCode: code,
-    clickedAt: new Date().toISOString(),
-    userAgent: event.headers['user-agent'] ?? null,
-    ip: anonymizeIp(ip),
-    referer: event.headers['referer'] ?? event.headers['referrer'] ?? null,
-    country: event.headers['cloudfront-viewer-country'] ?? null,
-    region: event.headers['cloudfront-viewer-country-region'] ?? null,
-    city: event.headers['cloudfront-viewer-city'] ?? null,
-  }).catch((err) => console.error('[redirect] click failed:', err.message));
+  // ── Get geo data + start click recording in parallel with URL lookup ──────
+  // CloudFront headers take priority (free, no rate limit)
+  // Fall back to ip-api.com for direct API Gateway access
+  const country =
+    event.headers['cloudfront-viewer-country'] ??
+    event.headers['CloudFront-Viewer-Country'] ?? null;
 
+  const region =
+    event.headers['cloudfront-viewer-country-region'] ??
+    event.headers['CloudFront-Viewer-Country-Region'] ?? null;
 
-  // ── Validate code format immediately ──────────────────────────────────────
+  const city =
+    event.headers['cloudfront-viewer-city'] ??
+    event.headers['CloudFront-Viewer-City'] ?? null;
+
+  // Start geo lookup in parallel if no CloudFront headers
+  const geoPromise = (!country)
+    ? getGeoFromIp(ip)
+    : Promise.resolve({ country, region, city });
+
+  // Start click recording promise early (will be populated after URL lookup)
+  let clickPromiseResolver: (() => void) | null = null;
+  const clickBarrier = new Promise<void>(resolve => { clickPromiseResolver = resolve; });
+
+  // ── Validate code ─────────────────────────────────────────────────────────
   if (!isValidShortCode(code)) {
     return error('Invalid short code', 'INVALID_CODE', 400);
   }
 
-  // // ── Rate limit (DDoS protection) ──────────────────────────────────────────
-  // const rateLimit = await checkRateLimit(
-  //   CacheKeys.rateLimitRedirect(ip),
-  //   RateLimits.redirect.limit,
-  //   RateLimits.redirect.windowMs
-  // );
+  // ── Rate limit ────────────────────────────────────────────────────────────
+  const rateLimit = await checkRateLimit(
+    CacheKeys.rateLimitRedirect(ip),
+    RateLimits.redirect.limit,
+    RateLimits.redirect.windowMs
+  );
 
-  // if (!rateLimit.allowed) {
-  //   return rateLimited(rateLimit.resetAt);
-  // }
+  if (!rateLimit.allowed) {
+    return rateLimited(rateLimit.resetAt);
+  }
 
-  // ── 1. Try Redis cache ────────────────────────────────────────────────────
+  // ── Redis cache ───────────────────────────────────────────────────────────
   const redis = getRedisClient();
   const cacheKey = CacheKeys.urlRecord(code);
-  // const cached = await redis.get(cacheKey);
+  const cached = await redis.get(cacheKey);
 
   let originalUrl: string | null = null;
   let isActive = true;
   let expiresAt: string | null = null;
 
-  // if (cached) {
-  //   // Cache HIT — fastest path
-  //   const record = JSON.parse(cached);
-  //   originalUrl = record.originalUrl;
-  //   isActive = record.isActive;
-  //   expiresAt = record.expiresAt;
-  // } else {
-    // Cache MISS — fetch from DynamoDB and re-populate cache
-    const record = await UrlRepository.getByCode(code);
-
-    if (!record) {
-      return error('Short URL not found', 'NOT_FOUND', 404);
-    }
-
+  if (cached) {
+    const record = JSON.parse(cached);
     originalUrl = record.originalUrl;
     isActive = record.isActive;
     expiresAt = record.expiresAt;
-
-    // Re-populate cache
+  } else {
+    const record = await UrlRepository.getByCode(code);
+    if (!record) return error('Short URL not found', 'NOT_FOUND', 404);
+    originalUrl = record.originalUrl;
+    isActive = record.isActive;
+    expiresAt = record.expiresAt;
     await redis.setex(cacheKey, CacheTTL.urlRecord, JSON.stringify(record));
-  // }
-
-  // ── Check URL is still active ─────────────────────────────────────────────
-  if (!isActive) {
-    return error('This link has been deactivated', 'DEACTIVATED', 410);
   }
 
-  // ── Check expiry ──────────────────────────────────────────────────────────
+  if (!isActive) return error('This link has been deactivated', 'DEACTIVATED', 410);
   if (expiresAt && new Date(expiresAt) < new Date()) {
     return error('This link has expired', 'EXPIRED', 410);
   }
 
-  // ── Fire click analytics (async, non-blocking) ────────────────────────────
-  // We deliberately do NOT await this. The user gets their redirect immediately.
-  // Interview talking point: "Decoupling analytics from the redirect path keeps
-  // p99 latency low. A slow PostgreSQL write never delays a redirect."
-  // 1. Record click FIRST (awaited)
+  // ── Record click (await geo + write to DB) ────────────────────────────────
+  const geo = await geoPromise;
+
+  // API Gateway lowercases headers, CloudFront keeps original case
+  const userAgent =
+    event.headers['user-agent'] ??
+    event.headers['User-Agent'] ??
+    null;
+
+  const referer =
+    event.headers['referer'] ??
+    event.headers['Referer'] ??
+    event.headers['referrer'] ??
+    null;
+
+  const clickPromise = recordClick({
+    id: generateEventId(),
+    shortCode: code,
+    clickedAt: new Date().toISOString(),
+    userAgent,
+    ip: anonymizeIp(ip),
+    referer,
+    country: geo.country,
+    region: geo.region,
+    city: geo.city,
+  }).catch((err) => {
+    console.error('[redirect] Failed to record click:', err.message);
+  });
 
   await clickPromise;
   return redirect(originalUrl!);
