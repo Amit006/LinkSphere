@@ -1,8 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { ShortenRequestSchema } from '@linksphere/core';
-import type { ShortenResponse } from '@linksphere/core';
+
+interface ShortenResponse {
+  shortCode: string;
+  shortUrl: string;
+  originalUrl: string;
+  expiresAt: string | null;
+}
 
 export default function HomePage() {
   const [url, setUrl] = useState('');
@@ -16,23 +21,25 @@ export default function HomePage() {
     setError(null);
     setResult(null);
 
-    const parsed = ShortenRequestSchema.safeParse({ url, alias: alias || undefined });
-    if (!parsed.success) {
-      setError(parsed.error.errors[0]?.message ?? 'Invalid input');
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      setError('URL must start with http:// or https://');
       return;
     }
 
     setLoading(true);
     try {
+      const body: Record<string, string> = { url };
+      if (alias) body.alias = alias;
+
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/shorten`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(parsed.data),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
 
       if (!data.success) {
-        setError(data.error.message);
+        setError(data.error?.message ?? 'Something went wrong');
       } else {
         setResult(data.data);
       }
@@ -51,11 +58,12 @@ export default function HomePage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-6">
+    <main className="flex min-h-screen flex-col items-center justify-center p-6 bg-gray-950">
       <div className="w-full max-w-lg space-y-8">
+
         {/* Header */}
         <div className="text-center">
-          <h1 className="text-4xl font-bold tracking-tight">
+          <h1 className="text-4xl font-bold tracking-tight text-white">
             Link<span className="text-cyan-400">Sphere</span>
           </h1>
           <p className="mt-2 text-gray-400 font-mono text-sm">
@@ -63,7 +71,7 @@ export default function HomePage() {
           </p>
         </div>
 
-        {/* Shorten form */}
+        {/* Form */}
         <div className="rounded-xl border border-gray-800 bg-gray-900 p-6 space-y-4">
           <div>
             <label className="block text-xs font-mono text-gray-500 mb-2 uppercase tracking-widest">
@@ -74,10 +82,10 @@ export default function HomePage() {
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleShorten()}
-              placeholder="https://your-very-long-url.com/with/many/params?q=foo"
+              placeholder="https://your-very-long-url.com/with/many/params"
               className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-3 text-sm
                          placeholder:text-gray-600 focus:border-cyan-500 focus:outline-none
-                         focus:ring-1 focus:ring-cyan-500 transition-colors"
+                         focus:ring-1 focus:ring-cyan-500 transition-colors text-white"
             />
           </div>
 
@@ -86,7 +94,7 @@ export default function HomePage() {
               Custom alias <span className="text-gray-600">(optional)</span>
             </label>
             <div className="flex items-center gap-2">
-              <span className="text-gray-600 text-sm font-mono">lnk.sph/</span>
+              <span className="text-gray-600 text-sm font-mono shrink-0">lnk.amitnk19.workers.dev/</span>
               <input
                 type="text"
                 value={alias}
@@ -94,7 +102,7 @@ export default function HomePage() {
                 placeholder="my-link"
                 className="flex-1 rounded-lg border border-gray-700 bg-gray-800 px-4 py-3 text-sm
                            placeholder:text-gray-600 focus:border-cyan-500 focus:outline-none
-                           focus:ring-1 focus:ring-cyan-500 transition-colors"
+                           focus:ring-1 focus:ring-cyan-500 transition-colors text-white"
               />
             </div>
           </div>
@@ -110,8 +118,8 @@ export default function HomePage() {
             disabled={loading || !url}
             className="w-full rounded-lg bg-cyan-500 px-4 py-3 text-sm font-semibold text-gray-950
                        hover:bg-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed
-                       transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2
-                       focus:ring-offset-gray-900"
+                       transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500
+                       focus:ring-offset-2 focus:ring-offset-gray-900"
           >
             {loading ? 'Shortening…' : 'Shorten URL →'}
           </button>
@@ -121,13 +129,16 @@ export default function HomePage() {
         {result && (
           <div className="rounded-xl border border-cyan-800 bg-cyan-950/30 p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-mono text-cyan-500 uppercase tracking-widest">Your short link</span>
+              <span className="text-xs font-mono text-cyan-500 uppercase tracking-widest">
+                Your short link
+              </span>
               {result.expiresAt && (
                 <span className="text-xs text-gray-500">
                   Expires {new Date(result.expiresAt).toLocaleDateString()}
                 </span>
               )}
             </div>
+
             <div className="flex items-center gap-3">
               <a
                 href={result.shortUrl}
@@ -145,17 +156,18 @@ export default function HomePage() {
                 {copied ? '✓ Copied' : 'Copy'}
               </button>
             </div>
+
             <div className="text-xs text-gray-600 truncate font-mono">{result.originalUrl}</div>
+
             <a
               href={`/dashboard/${result.shortCode}`}
-              className="inline-block text-xs text-gray-400 hover:text-gray-300 transition-colors"
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-cyan-400 transition-colors"
             >
-              View analytics →
+              📊 View analytics dashboard →
             </a>
           </div>
         )}
 
-        {/* Footer */}
         <p className="text-center text-xs text-gray-700 font-mono">
           Built with Next.js · AWS Lambda · Redis · DynamoDB · PostgreSQL
         </p>
