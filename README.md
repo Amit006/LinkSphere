@@ -182,10 +182,10 @@ Tested with [k6](https://k6.io) at 1,000 concurrent users (Week 6):
 ## Roadmap
 
 - [x] Week 1: Monorepo scaffold, all config
-- [ ] Week 2: Base62 + shorten/redirect API
-- [ ] Week 3: Redis caching + rate limiting
-- [ ] Week 4: Analytics pipeline + WebSockets
-- [ ] Week 5: Dashboard UI + charts
+- [x] Week 2: Base62 + shorten/redirect API
+- [x] Week 3: Redis caching + rate limiting
+- [x] Week 4: Analytics pipeline + WebSockets
+- [x] Week 5: Dashboard UI + charts
 - [ ] Week 6: Load testing + benchmarks
 - [ ] Week 7: Custom domain support
 - [ ] Week 8: Blog post + demo video
