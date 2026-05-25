@@ -6,7 +6,7 @@ import crypto from 'crypto';
  */
 export function anonymizeIp(ip: string): string {
   if (ip.includes(':')) {
-    // IPv6 — keep first 48 bits
+    // IPv6 — keep first 48 bits1
     const parts = ip.split(':');
     return parts.slice(0, 3).join(':') + ':0000:0000:0000:0000:0000';
   }

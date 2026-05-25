@@ -1,8 +1,4 @@
 import { defineConfig } from 'vitest/config';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   test: {
@@ -13,12 +9,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html'],
       include: ['src/**/*.ts'],
-      exclude: ['src/generated/**', 'src/**/*.test.ts'],
-    },
-  },
-  resolve: {
-    alias: {
-      '@linksphere/core': path.resolve(__dirname, '../../packages/core/src'),
+      exclude: ['src/**/*.test.ts', 'src/**/*.spec.ts'],
     },
   },
 });
