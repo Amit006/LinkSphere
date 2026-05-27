@@ -101,7 +101,7 @@ Tested with [k6](https://k6.io) at 1,000 concurrent users:
 - [x] Week 3: Redis caching + rate limiting
 - [x] Week 4: Analytics pipeline + WebSockets
 - [x] Week 5: Dashboard UI + charts
-- [ ] Week 6: Load testing + benchmarks
+- [x] Week 6: Load testing + benchmarks
 - [ ] Week 7: Custom domain support
 - [ ] Week 8: Blog post + demo video
 
