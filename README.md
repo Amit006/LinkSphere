@@ -101,58 +101,168 @@ linksphere/
 └── turbo.json                      # Turborepo config
 ```
 
-## Getting Started
+## ⚠️ Security Notice
+
+The `.env` file in this repo **must not contain real credentials**. If you see actual AWS keys, Redis URLs with passwords, or database connection strings in `.env`, rotate them immediately:
+- AWS: `aws iam create-access-key` + delete the old key in IAM Console
+- Upstash Redis: reset password in Upstash dashboard
+- Neon PostgreSQL: reset password in Neon dashboard
+
+Use `.env.local` (gitignored) for real values locally. Never commit secrets.
+
+---
+
+## Why a Lua Script for Rate Limiting?
+
+The sliding window rate limiter in `apps/api/src/middleware/rate-limit.ts` runs its core logic as a **Lua script evaluated atomically inside Redis**. Here is exactly why, and what would go wrong without it.
+
+### The race condition without Lua
+
+If the check-and-increment were two separate Redis calls, a race condition exists between concurrent Lambda invocations:
+
+```
+Lambda A: ZCARD key  → 9 (under limit of 10) ✓
+Lambda B: ZCARD key  → 9 (under limit of 10) ✓   ← both see 9 simultaneously
+Lambda A: ZADD key ...                              ← both get allowed
+Lambda B: ZADD key ...                              ← effective count = 11, limit bypassed
+```
+
+Under high concurrency this lets users exceed their limit proportional to Lambda concurrency — which defeats the entire purpose of rate limiting.
+
+### Why Lua fixes it
+
+Redis is **single-threaded**. Lua scripts run as an atomic unit — no other command executes while the script is running:
+
+```
+Lambda A: EVAL luaScript  → sees 9, adds request, returns allowed=true
+Lambda B: EVAL luaScript  → sees 10, returns allowed=false   ← correctly blocked
+```
+
+No race. No bypass. One round-trip instead of two.
+
+### Where it lives in this project
+
+```
+apps/api/src/middleware/rate-limit.ts   ← Lua script is inline (lines ~37-52)
+```
+
+The script uses a **sorted set** (ZSET) where each member is a request timestamp:
+
+```lua
+-- Simplified from rate-limit.ts
+redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start)   -- prune expired entries
+local count = redis.call('ZCARD', key)                      -- count in window
+if count < limit then
+  redis.call('ZADD', key, now, now .. '-' .. math.random())
+  redis.call('PEXPIRE', key, window_ms)
+  return {1, limit - count - 1}   -- allowed + remaining
+else
+  return {0, 0}                   -- rejected
+end
+```
+
+### Sliding window vs fixed window
+
+```
+Fixed window (resets at interval boundary):
+  11:59:50 PM → 10 requests  ← hits limit
+  12:00:00 AM → window resets
+  12:00:01 AM → 10 more      ← 20 requests in 11 seconds — boundary exploit
+
+Sliding window (always looks back exactly N ms):
+  Any 60-second slice has at most N requests — no exploit possible
+```
+
+> **Interview talking point:** "I used a Lua script because Redis is single-threaded and Lua is atomic. Two concurrent Lambdas can't race — one always sees the other's write before deciding to allow. Without this, the effective rate limit would be `limit × Lambda concurrency`."
+
+---
+
+## Local Development
 
 ### Prerequisites
 - Node.js 20+
-- AWS account + CLI configured
-- Redis instance ([Upstash](https://upstash.com) — free tier works)
-- PostgreSQL ([Supabase](https://supabase.com) or [Neon](https://neon.tech) — free tier works)
+- Docker (for local PostgreSQL + Redis — no cloud account needed for local dev)
+- AWS CLI (only needed for deploying, not for running locally)
 
-### Setup
+### One-command setup (recommended)
 
 ```bash
-# Clone and install
 git clone https://github.com/yourusername/linksphere
 cd linksphere
-npm install
-
-# Configure environment
-cp .env.example .env.local
-# Edit .env.local with your values
-
-# Run DB migrations
-just migrate
-
-# Start development
-just dev
+chmod +x scripts/dev.sh
+./scripts/dev.sh
 ```
 
-### Deploy
+`scripts/dev.sh` handles everything:
+1. Checks Node 20+ and Docker are installed
+2. Starts PostgreSQL + Redis via `docker-compose.yml`
+3. Waits for both services to pass health checks
+4. Runs `npm install` if needed
+5. Runs Prisma migrations against local Docker PostgreSQL
+6. Starts all dev servers with `REDIS_URL` and `DATABASE_URL` pointing at Docker
 
 ```bash
-# Deploy to dev (one command — see Justfile)
+# Options:
+SKIP_DOCKER=1 ./scripts/dev.sh   # Services already running
+RESET=1 ./scripts/dev.sh         # Wipe all volumes and start fresh
+```
+
+### Manual setup
+
+```bash
+# 1. Start infrastructure
+docker compose up -d postgres redis
+
+# 2. Install dependencies
+npm install
+
+# 3. Run migrations (points at local Docker DB)
+cd apps/api
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/linksphere_dev" \
+  npx prisma migrate dev
+
+# 4. Start dev servers
+export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/linksphere_dev"
+export REDIS_URL="redis://localhost:6379"
+npm run dev
+```
+
+### Local services
+
+| Service       | URL / Address         | Notes                                   |
+|---------------|-----------------------|-----------------------------------------|
+| Web (Next.js) | http://localhost:3000 | Hot reload                              |
+| API (Lambda)  | http://localhost:3001 | ts-node-dev Lambda emulation            |
+| PostgreSQL    | localhost:5432        | user: postgres / pass: postgres         |
+| Redis         | localhost:6379        | 256MB LRU eviction (mirrors Upstash)    |
+| Redis UI      | http://localhost:8081 | `--profile tools` only (optional)       |
+
+```bash
+# Optional Redis browser UI (http://localhost:8081)
+docker compose --profile tools up -d redis-commander
+
+# Useful Redis debug commands
+docker compose exec redis redis-cli KEYS "rl:*"     # rate-limit keys
+docker compose exec redis redis-cli KEYS "url:*"    # cached URL records
+docker compose exec redis redis-cli TTL "url:abc1"  # check TTL on a key
+
+# Full reset
+docker compose down -v
+```
+
+### Deploy to AWS
+
+```bash
+# Requires: AWS CLI configured, .env.local with real credentials
+
+# Deploy to dev (one command)
 just deploy-dev
 
-```
-Service deployed to stack linksphere-api-dev (128s)
-
-# endpoints:                                                                                                      
-  - POST - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/shorten
-  - GET - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/{code}
-  - GET - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/analytics/{code}
-  - GET - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/urls
-  - DELETE - https://hu3oovyyz9.execute-api.eu-north-1.amazonaws.com/dev/api/urls/{code}
-# functions:
-  - shorten: linksphere-api-dev-shorten (5.2 MB)                                                                  
-  - redirect: linksphere-api-dev-redirect (5.2 MB)
-  - analytics: linksphere-api-dev-analytics (5.2 MB)
-  - listUrls: linksphere-api-dev-listUrls (5.2 MB)
-  - deleteUrl: linksphere-api-dev-deleteUrl (5.2 MB)
-
-# Deploy to production (prompts for confirmation)
+# Deploy to production (prompts for confirmation + runs DB migrations first)
 just deploy-prod
 ```
+
+> **Note:** Deployment uses `serverless deploy` (see `apps/api/serverless.yml`). Local development only needs Docker — no AWS account required.
 
 ## Performance Benchmarks
 

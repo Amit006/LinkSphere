@@ -1,0 +1,85 @@
+# docker-compose.yml — LinkSphere local development stack
+#
+# Mirrors the production topology locally:
+#   PostgreSQL → analytics DB (same as Neon in prod)
+#   Redis      → cache + rate limiting (same as Upstash in prod)
+#
+# Usage:
+#   docker compose up -d          → start all services
+#   docker compose down           → stop all services
+#   docker compose down -v        → stop + delete volumes (full reset)
+#   docker compose logs -f redis  → tail Redis logs
+
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  # Stores click events and users (Prisma schema in apps/api/prisma/schema.prisma)
+  # In production: Neon (serverless Postgres). Locally: full Postgres 16.
+  postgres:
+    image: postgres:16-alpine
+    container_name: linksphere-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: linksphere_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Optional: place SQL seed scripts here and they auto-run on first start
+      # - ./scripts/seed.sql:/docker-entrypoint-initdb.d/seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d linksphere_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  # Cache + sliding-window rate limiting (ioredis in apps/api/src/lib/redis.ts)
+  # In production: Upstash (managed Redis). Locally: Redis 7 with LRU eviction.
+  redis:
+    image: redis:7-alpine
+    container_name: linksphere-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --loglevel notice
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ── Redis Commander (optional UI) ─────────────────────────────────────────
+  # Browse Redis keys at http://localhost:8081
+  # Useful for inspecting rate-limit keys and cached URL records
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: linksphere-redis-ui
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles:
+      - tools   # Only starts with: docker compose --profile tools up -d
+
+volumes:
+  pgdata:
+    name: linksphere-pgdata
+  redisdata:
+    name: linksphere-redisdata
